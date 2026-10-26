@@ -223,8 +223,8 @@ function provisionalName(scenario) {
 
 // ---------------------------------------------------------------- setup
 
-// First-run onboarding: the studio asks for an API key in the UI, works out from its prefix
-// whether it is an OpenAI or an Anthropic key, verifies it against that provider here, and
+// First-run onboarding: the studio asks for an API key in the UI, works out from its shape
+// whether it is an OpenAI, Anthropic or DeepSeek key, verifies it against that provider here, and
 // stores it in .env. The key never reaches any browser page — this is the one endpoint that
 // ever sees it, and it lives on localhost.
 app.post('/api/setup/key', wrap(async (req, res) => {

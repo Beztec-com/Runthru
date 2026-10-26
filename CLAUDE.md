@@ -24,9 +24,9 @@ npm run studio           # equivalent, direct
 npm test                 # Node's built-in test runner
 ```
 
-First launch offers to connect an OpenAI or Anthropic key, verifies it, and saves
-it to `.env`. Recording and manual editing work without one; only the AI features
-need it.
+First launch offers to connect an OpenAI, Anthropic or DeepSeek key, verifies it, and
+saves it to `.env`. Recording and manual editing work without one; only the AI
+features need it.
 
 ## Design principle worth preserving
 

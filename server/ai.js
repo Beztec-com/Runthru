@@ -1,8 +1,8 @@
 // The AI passes over a demo.
 //
-// Whichever provider is connected — OpenAI or Anthropic — is llm.js's business; everything
-// here is written once, in the OpenAI request shape, and goes out through callModel(). Four
-// entry points:
+// Whichever provider is connected — OpenAI, Anthropic or DeepSeek — is llm.js's business;
+// everything here is written once, in the OpenAI request shape, and goes out through callModel().
+// Four entry points:
 //   chat()            a copilot that edits the demo through real docops tool-calls
 //   autoDraft()       drafts the whole walkthrough from a fresh capture, using the screenshots
 //   reviewRecording() watches a take back and cuts what doesn't earn its place

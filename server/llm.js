@@ -1,19 +1,24 @@
 // Model providers.
 //
-// The studio works with either an OpenAI key or an Anthropic key. Everything above this file
+// The studio works with an OpenAI, an Anthropic or a DeepSeek key. Everything above this file
 // is written in the OpenAI chat-completions shape — a messages array, `tools` as function
 // schemas, `response_format` for JSON, and `choices[0].message` coming back — because that is
 // what the drafting, review, chat and autopilot passes were built against.
 //
 // So this module owns the difference: it picks the provider from whichever key is present,
-// asks that key which models it can actually see, and for Anthropic translates the request on
-// the way out and the reply on the way back. Nothing above here knows which API answered.
+// asks that key which models it can actually see, sends the request through the client that
+// provider needs, and for Anthropic translates the request on the way out and the reply on the
+// way back. DeepSeek already speaks the OpenAI shape, so it needs nothing but its own base URL
+// and key. Nothing above here knows which API answered.
 //
 // Keys live in .env and are read only here, server-side. They never reach the browser.
 
 const OPENAI_API = 'https://api.openai.com/v1';
 const ANTHROPIC_API = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
+// DeepSeek serves the OpenAI chat-completions shape from its own host: this is the base URL its
+// own examples use, with /v1 as the alias the OpenAI SDKs get pointed at.
+const DEEPSEEK_API = 'https://api.deepseek.com';
 
 export const PROVIDERS = {
   openai: {
@@ -30,11 +35,33 @@ export const PROVIDERS = {
     keysUrl: 'https://console.anthropic.com/settings/keys',
     keyHint: 'sk-ant-…',
   },
+  deepseek: {
+    label: 'DeepSeek',
+    keyEnv: 'DEEPSEEK_API_KEY',
+    modelEnv: 'DEEPSEEK_MODEL',
+    keysUrl: 'https://platform.deepseek.com/api_keys',
+    keyHint: 'sk-…',
+  },
+};
+
+// The clients we send through. OpenAI and DeepSeek take the same request and return the same
+// reply, so they share one call path and differ only in the host they are reached at — and in
+// whether the endpoint can be held to a JSON schema. Anthropic has its own client further down,
+// because it needs its request translated.
+const CLIENTS = {
+  openai: { label: 'OpenAI', api: OPENAI_API },
+  deepseek: {
+    label: 'DeepSeek',
+    api: DEEPSEEK_API,
+    // DeepSeek's JSON mode takes {type:'json_object'} and nothing else, so a pass that asked for
+    // a schema is asked for JSON in the prompt instead and unwrapped on the way back.
+    jsonObject: true,
+  },
 };
 
 // Ordered best-first. We ask the key what it can actually see rather than hardcoding one id,
 // so a retired model never breaks the studio. Newer ids than these may exist — add them here,
-// or pin OPENAI_MODEL / ANTHROPIC_MODEL in .env.
+// or pin OPENAI_MODEL / ANTHROPIC_MODEL / DEEPSEEK_MODEL in .env.
 const PREFERRED = {
   openai: [
     'gpt-5.6-sol',
@@ -61,15 +88,24 @@ const PREFERRED = {
     'claude-sonnet-4-6',
     'claude-opus-4-6',
   ],
+  // Same reasoning as Anthropic, and it matters more here: only DeepSeek's Flash model takes
+  // images, so it has to come first — every pass reads screenshots. The pro model is text-only,
+  // and the legacy names still resolve to Flash for keys that only advertise those.
+  deepseek: ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'],
 };
 
-const FALLBACK_MODEL = { openai: 'gpt-4o', anthropic: 'claude-sonnet-5' };
+const FALLBACK_MODEL = { openai: 'gpt-4o', anthropic: 'claude-sonnet-5', deepseek: 'deepseek-flash' };
 
 // Anthropic requires an explicit output ceiling on every request. Generous enough for a long
 // drafting pass, small enough to stay well inside an ordinary HTTP timeout.
 const ANTHROPIC_MAX_TOKENS = 16000;
 
 // ---------------------------------------------------------------- key + provider
+
+// DeepSeek keys are `sk-` followed by 32 characters — short enough to tell apart from an OpenAI
+// key (sk-proj-…, or the older sk-… at 48 or more), which is what lets the setup dialog take any
+// of the three keys without asking which one you pasted.
+const DEEPSEEK_KEY = /^sk-[A-Za-z0-9]{32}$/;
 
 function keyOf(provider) {
   return (process.env[PROVIDERS[provider]?.keyEnv] || '').trim();
@@ -79,24 +115,28 @@ function keyOf(provider) {
 function hasKeyFor(provider) {
   const k = keyOf(provider);
   if (provider === 'anthropic') return k.startsWith('sk-ant-') && k.length > 20;
+  if (provider === 'deepseek') return DEEPSEEK_KEY.test(k);
   return k.startsWith('sk-') && !k.startsWith('sk-ant-') && k.length > 20;
 }
 
-/** Which provider a pasted key belongs to, or null if it looks like neither. */
+/** Which provider a pasted key belongs to, or null if it looks like none of them. */
 export function detectProvider(key) {
   const k = String(key || '').trim();
   if (k.startsWith('sk-ant-')) return 'anthropic';
+  if (DEEPSEEK_KEY.test(k)) return 'deepseek';
   if (k.startsWith('sk-')) return 'openai';
   return null;
 }
 
-// With both keys present AI_PROVIDER decides; the studio writes it whenever a key is connected
-// from the UI, so the last key you connected is the one that gets used.
+// With more than one key present AI_PROVIDER decides; the studio writes it whenever a key is
+// connected from the UI, so the last key you connected is the one that gets used. The order
+// below is only the tie-break when nothing has pinned one.
 export function activeProvider() {
   const want = String(process.env.AI_PROVIDER || '').trim().toLowerCase();
   if (PROVIDERS[want] && hasKeyFor(want)) return want;
   if (hasKeyFor('anthropic')) return 'anthropic';
   if (hasKeyFor('openai')) return 'openai';
+  if (hasKeyFor('deepseek')) return 'deepseek';
   return null;
 }
 
@@ -104,17 +144,18 @@ export function hasKey() {
   return activeProvider() !== null;
 }
 
-function key() {
-  const p = activeProvider();
-  if (!p) throw new Error('No API key connected. Add one from the studio home page.');
-  return keyOf(p);
+function key(provider = activeProvider()) {
+  if (!provider) throw new Error('No API key connected. Add one from the studio home page.');
+  return keyOf(provider);
 }
 
 /** Verify a pasted key against its own API. Returns the provider it belongs to. */
 export async function verifyKey(k) {
   const provider = detectProvider(k);
   if (!provider) {
-    throw new Error('That doesn’t look like an API key — OpenAI keys start with sk-, Anthropic keys with sk-ant-.');
+    throw new Error(
+      'That doesn’t look like an API key — OpenAI keys start with sk-, Anthropic keys with sk-ant-, and DeepSeek keys are sk- followed by 32 characters.',
+    );
   }
   const { host, res } =
     provider === 'anthropic'
@@ -125,8 +166,10 @@ export async function verifyKey(k) {
           }).catch(() => null),
         }
       : {
-          host: 'api.openai.com',
-          res: await fetch(`${OPENAI_API}/models`, { headers: { Authorization: `Bearer ${k}` } }).catch(() => null),
+          // OpenAI and DeepSeek both verify by listing models with a bearer token; only the host
+          // differs, and the client table is the one place that knows it.
+          host: new URL(CLIENTS[provider].api).host,
+          res: await fetch(`${CLIENTS[provider].api}/models`, { headers: { Authorization: `Bearer ${k}` } }).catch(() => null),
         };
 
   const label = PROVIDERS[provider].label;
@@ -151,9 +194,9 @@ async function listModels(provider) {
   const res =
     provider === 'anthropic'
       ? await fetch(`${ANTHROPIC_API}/models?limit=100`, {
-          headers: { 'x-api-key': key(), 'anthropic-version': ANTHROPIC_VERSION },
+          headers: { 'x-api-key': key(provider), 'anthropic-version': ANTHROPIC_VERSION },
         })
-      : await fetch(`${OPENAI_API}/models`, { headers: { Authorization: `Bearer ${key()}` } });
+      : await fetch(`${CLIENTS[provider].api}/models`, { headers: { Authorization: `Bearer ${key(provider)}` } });
   if (!res.ok) throw new Error(`models list failed: HTTP ${res.status}`);
   const data = await res.json();
   return new Set((data.data || []).map((m) => m.id));
@@ -167,7 +210,7 @@ export async function resolveModel(force = false) {
   if (pinned) return pinned;
   if (cachedModel.has(provider) && !force) return cachedModel.get(provider);
 
-  const prefix = provider === 'anthropic' ? 'claude-' : 'gpt-';
+  const prefix = provider === 'anthropic' ? 'claude-' : provider === 'deepseek' ? 'deepseek-' : 'gpt-';
   try {
     const available = await listModels(provider);
     const pick =
@@ -206,10 +249,12 @@ export async function callModel(body) {
   const provider = activeProvider();
   if (!provider) throw new Error('No API key connected. Add one from the studio home page.');
   const model = body.model || (await resolveModel());
-  return provider === 'anthropic' ? callAnthropic({ ...body, model }) : callOpenAI({ ...body, model });
+  // Anthropic gets its own translated client; OpenAI and DeepSeek share one, told apart by the
+  // provider key it is sent through.
+  return provider === 'anthropic' ? callAnthropic({ ...body, model }) : callOpenAI(provider, { ...body, model });
 }
 
-// ---------------------------------------------------------------- openai
+// ---------------------------------------------------------------- openai-shaped
 
 // Params a given model has already rejected, so we stop sending them. Model generations
 // differ on what they accept — the gpt-5 family, for instance, only allows the default
@@ -218,31 +263,68 @@ const unsupported = new Map();
 
 // Models that refuse tool calls unless reasoning is explicitly switched off on this endpoint.
 // Newer reasoning models reject "function tools with reasoning_effort" on /v1/chat/completions
-// and name the remedy in the error, so learn it from them rather than hardcoding a list.
+// and name the remedy in the error, so learn it from them rather than hardcoding a list. How a
+// model is told to stop reasoning differs by endpoint: OpenAI takes reasoning_effort, DeepSeek a
+// thinking toggle.
 const needsNoReasoning = new Set();
+const NO_REASONING = {
+  openai: { reasoning_effort: 'none' },
+  deepseek: { thinking: { type: 'disabled' } },
+};
 
-function dropUnsupported(model, body) {
+function dropUnsupported(provider, model, body) {
   const dropped = unsupported.get(model);
   let out = body;
   if (dropped) {
     out = { ...out };
     for (const p of dropped) delete out[p];
   }
-  if (needsNoReasoning.has(model) && out.tools?.length) {
-    out = { ...out, reasoning_effort: 'none' };
-  }
+  if (needsNoReasoning.has(model) && out.tools?.length) out = { ...out, ...NO_REASONING[provider] };
   return out;
 }
 
-async function callOpenAI(body, attempt = 0) {
+// A schema-constrained reply, asked for in the prompt. Used by DeepSeek, whose JSON mode takes
+// {type:'json_object'} and nothing else, and by an Anthropic model that won't hold a schema.
+function schemaPreamble(schema) {
+  return (
+    'Reply with a single JSON object and nothing else — no prose, no code fences. It must ' +
+    `match this JSON Schema:\n${JSON.stringify(schema)}`
+  );
+}
+
+// The OpenAI-shaped request, adjusted for an endpoint that can't be held to a JSON schema.
+function toOpenAIRequest(provider, body) {
+  if (!CLIENTS[provider].jsonObject) return body;
+  const schema = body.response_format?.json_schema?.schema;
+  if (!schema) return body;
+  return {
+    ...body,
+    response_format: { type: 'json_object' },
+    messages: [{ role: 'system', content: schemaPreamble(schema) }, ...(body.messages || [])],
+  };
+}
+
+async function callOpenAI(provider, body, attempt = 0) {
+  const client = CLIENTS[provider];
   const model = body.model;
-  const res = await fetch(`${OPENAI_API}/chat/completions`, {
+  const wantsJson = !!body.response_format?.json_schema;
+  const res = await fetch(`${client.api}/chat/completions`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${key()}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(dropUnsupported(model, body)),
+    headers: { Authorization: `Bearer ${key(provider)}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(toOpenAIRequest(provider, dropUnsupported(provider, model, body))),
   });
 
-  if (res.ok) return res.json();
+  if (res.ok) {
+    const data = await res.json();
+    if (client.jsonObject && wantsJson) {
+      const msg = data.choices?.[0]?.message;
+      // JSON mode is a nudge, not a guarantee: the schema went in through the prompt, so a code
+      // fence around the reply has to come off before the caller parses it.
+      if (typeof msg?.content === 'string' && msg.content.trim()) msg.content = unwrapJson(msg.content);
+      if (!msg?.content?.trim()) throw new Error(`${client.label} came back with an empty reply. Try that pass again.`);
+    }
+    return data;
+  }
 
   const text = await res.text();
   let msg = text;
@@ -251,22 +333,30 @@ async function callOpenAI(body, attempt = 0) {
   } catch {}
 
   // "Function tools with reasoning_effort are not supported for <model> in /v1/chat/completions.
-  // …or set reasoning_effort to 'none'." Take the remedy the API offers and remember it.
-  if (attempt < 4 && !needsNoReasoning.has(model) && /reasoning_effort/i.test(msg) && /not supported/i.test(msg)) {
+  // …or set reasoning_effort to 'none'." DeepSeek says the same about its thinking mode. Take
+  // the remedy the API offers and remember it for that model.
+  if (
+    attempt < 4 &&
+    !needsNoReasoning.has(model) &&
+    /reasoning_effort|reasoning_content|thinking/i.test(msg) &&
+    /not supported|unsupported|invalid|not allowed/i.test(msg)
+  ) {
     needsNoReasoning.add(model);
-    return callOpenAI(body, attempt + 1);
+    return callOpenAI(provider, body, attempt + 1);
   }
 
-  // "Unsupported value: 'temperature' does not support 0.4…" / "Unsupported parameter: 'x'"
-  const bad = /Unsupported (?:value|parameter): '([^']+)'/.exec(msg)?.[1];
+  // "Unsupported value: 'temperature' does not support 0.4…" / "Unsupported parameter: 'x'" on
+  // OpenAI, "Invalid parameter: 'tool_choice'" on DeepSeek. Whichever wording arrives, if it
+  // names something we sent, drop that parameter and ask again.
+  const bad = /(?:unsupported|invalid|unknown|unrecognized)[^'"`]{0,40}?['"`]([A-Za-z_][A-Za-z0-9_]*)['"`]/i.exec(msg)?.[1];
   if (bad && attempt < 4 && bad in body) {
     const set = unsupported.get(model) || new Set();
     set.add(bad);
     unsupported.set(model, set);
-    return callOpenAI(body, attempt + 1);
+    return callOpenAI(provider, body, attempt + 1);
   }
 
-  throw new Error(`OpenAI: ${msg}`);
+  throw new Error(`${client.label}: ${msg}`);
 }
 
 // ---------------------------------------------------------------- anthropic
@@ -395,10 +485,7 @@ function toAnthropicRequest(body) {
     if (noSchema.has(model)) {
       // Asked for by hand when the model can't be constrained to a schema. The reply is
       // unwrapped below before it reaches the caller's JSON.parse.
-      preamble.push(
-        'Reply with a single JSON object and nothing else — no prose, no code fences. It must ' +
-          `match this JSON Schema:\n${JSON.stringify(schema)}`,
-      );
+      preamble.push(schemaPreamble(schema));
     } else {
       req.output_config = { format: { type: 'json_schema', schema: normalizeSchema(schema) } };
     }
@@ -409,6 +496,8 @@ function toAnthropicRequest(body) {
 }
 
 // Models talked into returning JSON by prompt alone still reach for a code fence now and then.
+// Shared by the Anthropic path (for a model that won't hold a schema) and by DeepSeek's JSON
+// mode, which only takes {type:'json_object'}.
 function unwrapJson(text) {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
   const body = (fenced ? fenced[1] : text).trim();

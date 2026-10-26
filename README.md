@@ -42,7 +42,8 @@
 
 That installs dependencies, downloads the recording browser if it's missing, and opens
 [localhost:4400](http://localhost:4400). On first launch the studio offers to connect an API
-key — OpenAI or Anthropic, whichever you have. Paste one and it's verified and saved to `.env`
+key — OpenAI, Anthropic or DeepSeek, whichever you have. Paste one and it's verified and saved
+to `.env`
 for you. It's skippable: recording and manual editing work without a key; only the AI features
 need one.
 
@@ -197,23 +198,30 @@ are skipped under `prefers-reduced-motion`. Toggle them per demo in the inspecto
 Your key lives in `.env` (written by the first-run setup, or by hand) and is used **only
 server-side**. It never reaches the browser.
 
-Either provider works. `OPENAI_API_KEY` talks to OpenAI's chat completions; `ANTHROPIC_API_KEY`
-talks to Claude's messages API. The key's prefix is what identifies it, so the setup dialog
-takes both without asking you which is which. Set both and `AI_PROVIDER=openai|anthropic`
-decides — connecting a key from the UI writes that line for you, so the last key you connect
-wins.
+Any of three providers works. `OPENAI_API_KEY` talks to OpenAI's chat completions;
+`ANTHROPIC_API_KEY` talks to Claude's messages API; `DEEPSEEK_API_KEY` talks to DeepSeek's
+OpenAI-compatible endpoint at `https://api.deepseek.com`. The key's shape is what identifies it —
+`sk-ant-…` is Anthropic, `sk-` plus 32 characters is DeepSeek, anything else starting `sk-` is
+OpenAI — so the setup dialog takes all three without asking which is which. Set more than one and
+`AI_PROVIDER=openai|anthropic|deepseek` decides — connecting a key from the UI writes that line
+for you, so the last key you connect wins.
 
 Everything above `server/llm.js` is written once, in the OpenAI request shape. `llm.js` owns
 the difference: for an Anthropic key it translates the request on the way out (system prompts
 lifted out of the messages array, tool calls and screenshots into content blocks, JSON schemas
-into `output_config`) and the reply on the way back. The drafting, review, chat and autopilot
-passes don't know which API answered.
+into `output_config`) and the reply on the way back. A DeepSeek key needs no translation — it is
+an OpenAI-compatible endpoint — so that client differs only in its base URL and key, plus its
+JSON mode, which takes `{type:'json_object'}` rather than a schema: a schema-constrained pass is
+asked for JSON in the prompt instead, and the reply is unwrapped on the way back. Note that only
+`deepseek-flash` reads screenshots, so pinning `deepseek-v4-pro` costs you the passes that look at
+the screen. The drafting, review, chat and autopilot passes don't know which API answered.
 
 The model is pinned in `.env`:
 
 ```
 OPENAI_MODEL=gpt-5.5
 ANTHROPIC_MODEL=claude-opus-5
+DEEPSEEK_MODEL=deepseek-flash
 ```
 
 Comment those out and the studio asks your key which models it can actually see on boot, then
@@ -223,6 +231,7 @@ anything. To see your options:
 ```bash
 curl https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY"
 curl https://api.anthropic.com/v1/models -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01"
+curl https://api.deepseek.com/models -H "Authorization: Bearer $DEEPSEEK_API_KEY"
 ```
 
 Model generations disagree about which request parameters they accept. The gpt-5 family, for
@@ -309,7 +318,7 @@ server/
   assets.js           fetch, content-hash and dedupe images/fonts/CSS
   docops.js           every mutation, shared by UI + REST + AI
   store.js            persistence + undo/redo history
-  llm.js              provider layer: OpenAI or Anthropic, one request shape
+  llm.js              provider layer: OpenAI, Anthropic or DeepSeek, one request shape
   ai.js               the AI passes: chat tools, vision auto-draft, review, rewrite
   export.js           static bundle writer
   showcase.js         feature showcase storage + export

@@ -276,17 +276,19 @@ function setupModal({ welcome = false } = {}) {
     body: `
       ${welcome ? `<p>Record any web app into an interactive demo, edit it by hand or by talking to
         an AI, and export it as a static bundle you can host anywhere.</p>` : ''}
-      <p>Connect an OpenAI or Anthropic API key to unlock the AI layer — auto-drafted
+      <p>Connect an OpenAI, Anthropic or DeepSeek API key to unlock the AI layer — auto-drafted
         walkthroughs, the chat copilot, and demos that record themselves. Recording and manual
         editing work without one.</p>
       <div class="field"><label>API key</label>
         <input class="input input--key" id="setupKey" type="password" placeholder="sk-… or sk-ant-…"
                autocomplete="off" spellcheck="false"></div>
-      <p class="hint">Paste either one — the key's prefix says which it is. Create an OpenAI key at
+      <p class="hint">Paste any of them — the key's shape says which it is. Create an OpenAI key at
         <a href="https://platform.openai.com/api-keys" target="_blank"
-        rel="noreferrer">platform.openai.com/api-keys</a>, or an Anthropic key at
+        rel="noreferrer">platform.openai.com/api-keys</a>, an Anthropic key at
         <a href="https://console.anthropic.com/settings/keys" target="_blank"
-        rel="noreferrer">console.anthropic.com/settings/keys</a>. It's stored in <code>.env</code>
+        rel="noreferrer">console.anthropic.com/settings/keys</a>, or a DeepSeek key at
+        <a href="https://platform.deepseek.com/api_keys" target="_blank"
+        rel="noreferrer">platform.deepseek.com/api_keys</a>. It's stored in <code>.env</code>
         on this machine and used only server-side — it never reaches the browser.</p>`,
     onConfirm: async (root) => {
       const key = root.querySelector('#setupKey').value.trim();
