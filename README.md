@@ -43,9 +43,8 @@
 That installs dependencies, downloads the recording browser if it's missing, and opens
 [localhost:4400](http://localhost:4400). On first launch the studio offers to connect an API
 key — OpenAI, Anthropic or DeepSeek, whichever you have. Paste one and it's verified and saved
-to `.env`
-for you. It's skippable: recording and manual editing work without a key; only the AI features
-need one.
+to `.env` for you. It's skippable: recording and manual editing work without a key; only the AI
+features need one.
 
 ![Connecting an API key, offered on first launch and reopenable any time](docs/onboarding.png)
 
@@ -54,11 +53,23 @@ need one.
 PORT=5000 ./run.sh      # different port
 ```
 
-Or drive it directly: `npm install && npm run studio`.
+Or drive it directly, on any OS: `npm install && npm run studio`.
+
+**On Windows** `run.sh` needs bash (WSL or Git Bash). From PowerShell the same steps are:
+
+```powershell
+npm install                        # what ./run.sh does first
+npx playwright install chromium    # the recording browser, once
+npm run studio                     # serves http://localhost:4400
+npm run serve-export               # serve exported bundles → http://localhost:4500
+$env:PORT=5000; npm run studio     # different port
+```
 
 Run the tests with `npm test`. They use Node's built-in test runner, so there is nothing extra
 to install, and they cover the parts that are worth pinning: the op table every mutation goes
-through, the persistence layer's undo history and per-demo write lock, and the static export.
+through, the persistence layer's undo history and per-demo write lock, the static export, and the
+provider layer (which key shape belongs to which provider, which provider wins when several are
+connected, and model choice).
 
 Then: **New** → name it and give it a URL → a real Chromium window opens → drive it as you
 normally would. Every click, form entry and page change becomes a step. Hit **Finish** in the
@@ -198,6 +209,13 @@ are skipped under `prefers-reduced-motion`. Toggle them per demo in the inspecto
 Your key lives in `.env` (written by the first-run setup, or by hand) and is used **only
 server-side**. It never reaches the browser.
 
+```
+OPENAI_API_KEY=sk-…            # https://platform.openai.com/api-keys
+ANTHROPIC_API_KEY=sk-ant-…     # https://console.anthropic.com/settings/keys
+DEEPSEEK_API_KEY=sk-…          # https://platform.deepseek.com/api_keys
+AI_PROVIDER=deepseek           # only consulted when more than one key is set
+```
+
 Any of three providers works. `OPENAI_API_KEY` talks to OpenAI's chat completions;
 `ANTHROPIC_API_KEY` talks to Claude's messages API; `DEEPSEEK_API_KEY` talks to DeepSeek's
 OpenAI-compatible endpoint at `https://api.deepseek.com`. The key's shape is what identifies it —
@@ -296,6 +314,9 @@ their size on disk. The archive is written with `node:zlib` alone; no zip depend
 npm run serve-export                  # lists every export
 npm run serve-export -- your-export-name
 ```
+
+Those are npm scripts, so they are the same on Windows; `./run.sh exports` is just the bash
+shortcut for the first one.
 
 > Exports must be served over **http(s)**, not opened as a `file://` path. Browsers give
 > `file://` iframes an opaque origin, which stops the player measuring elements inside the

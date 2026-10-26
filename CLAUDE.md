@@ -24,9 +24,24 @@ npm run studio           # equivalent, direct
 npm test                 # Node's built-in test runner
 ```
 
+On Windows `run.sh` needs bash (WSL or Git Bash); from PowerShell the same steps are:
+
+```powershell
+npm install                        # what ./run.sh does first
+npx playwright install chromium    # the recording browser, once
+npm run studio                     # serves http://localhost:4400
+npm run serve-export               # serve exported bundles at :4500
+$env:PORT=5000; npm run studio     # a different port
+```
+
 First launch offers to connect an OpenAI, Anthropic or DeepSeek key, verifies it, and
 saves it to `.env`. Recording and manual editing work without one; only the AI
-features need it.
+features need it. The key's shape picks the provider — `sk-ant-…` is Anthropic, `sk-`
+plus 32 characters is DeepSeek, anything else starting `sk-` is OpenAI — and
+`AI_PROVIDER=openai|anthropic|deepseek` settles it when more than one key is set.
+DeepSeek speaks the OpenAI request shape at `https://api.deepseek.com`, so it needs no
+translation layer, but only `deepseek-flash` reads screenshots. See
+[`README.md`](./README.md#the-ai-layer).
 
 ## Design principle worth preserving
 
@@ -36,8 +51,9 @@ only the result would lose the screen that invited the click. Do not change this
 without a good reason.
 
 Tests cover the parts worth pinning: the op table every mutation goes through,
-the persistence layer's undo history and per-demo write lock, and the static
-export. Keep them passing.
+the persistence layer's undo history and per-demo write lock, the static export, and
+the provider layer (key shapes, which provider wins when several are connected, and
+model choice). Keep them passing.
 
 ## When recording Runnit
 
